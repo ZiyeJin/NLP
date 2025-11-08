@@ -128,7 +128,13 @@ def create_augmented_dataloader(args, dataset):
 
     # 3. Apply the custom transformation (from utils.py)
     # load_from_cache_file=False is important as the transform might change
-    transformed_train_subset = random_train_subset.map(custom_transform, load_from_cache_file=False)
+    # transformed_train_subset = random_train_subset.map(custom_transform, load_from_cache_file=False)
+    transformed_train_subset = random_train_subset.map(
+    custom_transform, 
+    batched=True, 
+    batch_size=32,  # Process 32 examples at a time
+    load_from_cache_file=False
+    )
     
     # 4. Combine the original training set with the new transformed set
     augmented_dataset = datasets.concatenate_datasets([original_train_set, transformed_train_subset])
@@ -163,7 +169,13 @@ def create_transformed_dataloader(args, dataset, debug_transformation):
 
         exit()
 
-    transformed_dataset = dataset["test"].map(custom_transform, load_from_cache_file=False)
+    # transformed_dataset = dataset["test"].map(custom_transform, load_from_cache_file=False)
+    transformed_dataset = dataset["test"].map(
+    custom_transform, 
+    batched=True, 
+    batch_size=32,  # Process 32 examples at a time
+    load_from_cache_file=False
+    )
     transformed_tokenized_dataset = transformed_dataset.map(tokenize_function, batched=True, load_from_cache_file=False)
     transformed_tokenized_dataset = transformed_tokenized_dataset.remove_columns(["text"])
     transformed_tokenized_dataset = transformed_tokenized_dataset.rename_column("label", "labels")

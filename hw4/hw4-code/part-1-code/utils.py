@@ -52,7 +52,7 @@ def example_transform(example):
     example["text"] = example["text"].lower()
     return example
 
-def custom_transform(example):
+def custom_transform(examples):
     ################################
     ##### YOUR CODE BEGINGS HERE ###
 
@@ -63,30 +63,26 @@ def custom_transform(example):
     # You should update example["text"] using your transformation
 
     # raise NotImplementedError
-    text = example['text']
+    texts = examples['text']
     
     try:
-        # 1. Translate English to German
-        # We set truncation=True and max_length=512 to prevent errors on long reviews
-        batch = EN_TO_DE_TOKENIZER([text], return_tensors="pt", padding=True, truncation=True, max_length=512).to(DEVICE)
+        # 1. Translate English to German (in a batch)
+        batch = EN_TO_DE_TOKENIZER(texts, return_tensors="pt", padding=True, truncation=True, max_length=512).to(DEVICE)
         generated_ids = EN_TO_DE_MODEL.generate(**batch)
-        german_text = EN_TO_DE_TOKENIZER.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        german_texts = EN_TO_DE_TOKENIZER.batch_decode(generated_ids, skip_special_tokens=True)
 
-        # 2. Translate German back to English
-        batch = DE_TO_EN_TOKENIZER([german_text], return_tensors="pt", padding=True, truncation=True, max_length=512).to(DEVICE)
+        # 2. Translate German back to English (in a batch)
+        batch = DE_TO_EN_TOKENIZER(german_texts, return_tensors="pt", padding=True, truncation=True, max_length=512).to(DEVICE)
         generated_ids = DE_TO_EN_MODEL.generate(**batch)
-        back_translated_text = DE_TO_EN_TOKENIZER.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        back_translated_texts = DE_TO_EN_TOKENIZER.batch_decode(generated_ids, skip_special_tokens=True)
         
-        # Ensure we didn't get an empty string
-        if back_translated_text.strip():
-            example['text'] = back_translated_text
-        # If translation fails and returns empty, we keep the original text
+        # 3. Assign the new list of texts back
+        examples['text'] = back_translated_texts
             
     except Exception as e:
-        # If any step fails (e.g., review is too short or long),
-        # print a warning and just return the original text instead of crashing.
-        print(f"Back-translation failed on one sample. Error: {e}")
-        pass # Keep example["text"] unchanged
+        print(f"Back-translation failed on a BATCH. Error: {e}")
+        # If the batch fails, just return the original texts for this batch
+        pass
 
     ##### YOUR CODE ENDS HERE ######
 
