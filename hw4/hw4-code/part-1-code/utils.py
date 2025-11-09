@@ -52,7 +52,7 @@ def example_transform(example):
     example["text"] = example["text"].lower()
     return example
 
-def custom_transform(examples):
+def custom_transform(example):
     ################################
     ##### YOUR CODE BEGINGS HERE ###
 
@@ -63,7 +63,7 @@ def custom_transform(examples):
     # You should update example["text"] using your transformation
 
     # raise NotImplementedError
-    texts = examples['text']
+    texts = example['text']
     
     try:
         # 1. Translate English to German (in a batch)
@@ -77,7 +77,7 @@ def custom_transform(examples):
         back_translated_texts = DE_TO_EN_TOKENIZER.batch_decode(generated_ids, skip_special_tokens=True)
         
         # 3. Assign the new list of texts back
-        examples['text'] = back_translated_texts
+        example['text'] = back_translated_texts
             
     except Exception as e:
         print(f"Back-translation failed on a BATCH. Error: {e}")
