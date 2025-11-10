@@ -132,7 +132,7 @@ def create_augmented_dataloader(args, dataset):
     transformed_train_subset = random_train_subset.map(
     custom_transform, 
     batched=True, 
-    batch_size=32,  # Process 32 examples at a time
+    batch_size=128, 
     load_from_cache_file=False
     )
     
@@ -173,7 +173,7 @@ def create_transformed_dataloader(args, dataset, debug_transformation):
     transformed_dataset = dataset["test"].map(
     custom_transform, 
     batched=True, 
-    batch_size=32,  # Process 32 examples at a time
+    batch_size=128,  
     load_from_cache_file=False
     )
     transformed_tokenized_dataset = transformed_dataset.map(tokenize_function, batched=True, load_from_cache_file=False)
