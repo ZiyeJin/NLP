@@ -3,7 +3,7 @@ import os
 import torch
 
 import transformers
-from transformers import T5ForConditionalGeneration, T5Config
+from transformers import T5ForConditionalGeneration, T5Config, T5Tokenizer
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 import wandb
 
@@ -11,7 +11,13 @@ DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 
 def setup_wandb(args):
     # Implement this if you wish to use wandb in your experiments
-    pass
+    # pass
+    if args.use_wandb:
+        wandb.init(
+            project="t5-text-to-sql", # Change this to your project name
+            name=args.experiment_name,
+            config=args
+        )
 
 def initialize_model(args):
     '''
@@ -20,7 +26,22 @@ def initialize_model(args):
     or training a T5 model initialized with the 'google-t5/t5-small' config
     from scratch.
     '''
-    pass
+    # pass
+    tokenizer = T5Tokenizer.from_pretrained('google-t5/t5-small')
+    
+    if args.finetune:
+        # Finetuning: Load the pre-trained weights
+        print("Initializing model from pre-trained 't5-small'...")
+        model = T5ForConditionalGeneration.from_pretrained('google-t5/t5-small')
+    else:
+        # From scratch: Load the config, but not the weights
+        print("Initializing model from 't5-small' config (training from scratch)...")
+        config = T5Config.from_pretrained('google-t5/t5-small')
+        model = T5ForConditionalGeneration(config)
+
+    model = model.to(DEVICE)
+    return model, tokenizer 
+
 
 def mkdir(dirpath):
     if not os.path.exists(dirpath):
@@ -31,11 +52,32 @@ def mkdir(dirpath):
 
 def save_model(checkpoint_dir, model, best):
     # Save model checkpoint to be able to load the model later
-    pass
+    # pass
+    print(f"Saving model to {checkpoint_dir}")
+    mkdir(checkpoint_dir)
+    
+    if best:
+        save_path = os.path.join(checkpoint_dir, 'best_model')
+    else:
+        save_path = os.path.join(checkpoint_dir, 'latest_model')
+        
+    model.save_pretrained(save_path)
 
 def load_model_from_checkpoint(args, best):
     # Load model from a checkpoint
-    pass
+    # pass
+    model_type = 'ft' if args.finetune else 'scr'
+    checkpoint_dir = os.path.join('checkpoints', f'{model_type}_experiments', args.experiment_name)
+    
+    if best:
+        load_path = os.path.join(checkpoint_dir, 'best_model')
+    else:
+        load_path = os.path.join(checkpoint_dir, 'latest_model')
+        
+    print(f"Loading model from {load_path}...")
+    model = T5ForConditionalGeneration.from_pretrained(load_path)
+    model = model.to(DEVICE)
+    return model
 
 def initialize_optimizer_and_scheduler(args, model, epoch_length):
     optimizer = initialize_optimizer(args, model)

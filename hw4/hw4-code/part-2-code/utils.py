@@ -200,3 +200,35 @@ def set_random_seeds(seed_value=42):
     torch.cuda.manual_seed_all(seed_value)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+
+def get_schema_string(schema_file='data/flight_database.schema'):
+    """
+    Reads the schema file and converts it into a single,
+    simplified string representation.
+    """
+    with open(schema_file, 'r') as f:
+        schema_raw = f.read()
+    
+    tables = {}
+    current_table = None
+    
+    for line in schema_raw.splitlines():
+        if line.strip() == "":
+            continue
+        if not line.startswith("\t"):
+            # This is a new table
+            current_table = line.strip()
+            tables[current_table] = []
+        else:
+            # This is a column
+            col_name = line.strip().split(" ")[0]
+            if current_table:
+                tables[current_table].append(col_name)
+    
+    # Format: "table_name ( col1, col2 ), table_name_2 ( col1, col2 )"
+    schema_parts = []
+    for table, cols in tables.items():
+        schema_parts.append(f"{table} ( {', '.join(cols)} )")
+    
+    return " , ".join(schema_parts)
