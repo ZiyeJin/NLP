@@ -61,7 +61,7 @@ def train(args, model, tokenizer, train_loader, dev_loader, optimizer, scheduler
     args.checkpoint_dir = checkpoint_dir
     experiment_name = 'ft_experiment'
     gt_sql_path = os.path.join(f'data/dev.sql')
-    gt_record_path = os.path.join(f'records/dev_gt_records.pkl')
+    gt_record_path = os.path.join(f'records/ground_truth_dev.pkl')
     model_sql_path = os.path.join(f'results/t5_{model_type}_{experiment_name}_dev.sql')
     model_record_path = os.path.join(f'records/t5_{model_type}_{experiment_name}_dev.pkl')
     
