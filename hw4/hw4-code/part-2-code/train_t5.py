@@ -156,7 +156,7 @@ def eval_epoch(args, model, tokenizer, dev_loader, gt_sql_pth, model_sql_path, g
     # Set up generation config.
     # We use greedy decoding, but you can experiment with beam search.
     generation_config = GenerationConfig(
-        max_new_tokens=128,
+        max_new_tokens=256,
         pad_token_id=PAD_IDX,
         eos_token_id=tokenizer.eos_token_id,
         num_beams=4, 
@@ -230,7 +230,7 @@ def test_inference(args, model, tokenizer, test_loader, model_sql_path, model_re
     
     # Set up generation config
     generation_config = GenerationConfig(
-        max_new_tokens=128,
+        max_new_tokens=256,
         pad_token_id=PAD_IDX,
         eos_token_id=tokenizer.eos_token_id,
         num_beams=4, 
