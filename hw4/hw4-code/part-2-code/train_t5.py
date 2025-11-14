@@ -159,7 +159,7 @@ def eval_epoch(args, model, tokenizer, dev_loader, gt_sql_pth, model_sql_path, g
         max_new_tokens=128,
         pad_token_id=PAD_IDX,
         eos_token_id=tokenizer.eos_token_id,
-        num_beams=1, # 1 = greedy search
+        num_beams=4, 
     )
 
     with torch.no_grad():
@@ -233,7 +233,7 @@ def test_inference(args, model, tokenizer, test_loader, model_sql_path, model_re
         max_new_tokens=128,
         pad_token_id=PAD_IDX,
         eos_token_id=tokenizer.eos_token_id,
-        num_beams=1, # 1 = greedy search
+        num_beams=4, 
     )
 
     with torch.no_grad():

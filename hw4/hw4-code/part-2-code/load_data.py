@@ -52,7 +52,8 @@ class T5Dataset(Dataset):
         # This is our "pre-processing"
         processed_inputs = []
         for nl in self.raw_nl:
-            input_text = f"translate English to SQL: query: {nl} schema: {schema_string}"
+            # input_text = f"translate English to SQL: query: {nl} schema: {schema_string}"
+            input_text = f"translate English to SQL: schema: {schema_string} query: {nl}"
             processed_inputs.append(input_text)
             
         # Tokenize inputs and outputs
