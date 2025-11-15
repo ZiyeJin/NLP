@@ -26,7 +26,7 @@ def initialize_model(args):
     or training a T5 model initialized with the 'google-t5/t5-small' config
     from scratch.
     '''
-    model_name = 'google-t5/t5-small'
+    model_name = 'google-t5/t5-base'
     
     if args.finetune:
         print(f"Initializing model from pretrained checkpoint: {model_name}")

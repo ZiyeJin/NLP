@@ -281,6 +281,11 @@ def main():
     # Load the data and the model
     train_loader, dev_loader, test_loader = load_t5_data(args.batch_size, args.test_batch_size)
     model = initialize_model(args)
+
+    # Resize model embeddings to match the new tokenizer (with SQL tokens)
+    print("Resizing model token embeddings...")
+    model.resize_token_embeddings(len(train_loader.dataset.tokenizer))
+    
     optimizer, scheduler = initialize_optimizer_and_scheduler(args, model, len(train_loader))
 
     # Train 

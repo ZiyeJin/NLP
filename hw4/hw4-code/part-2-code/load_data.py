@@ -27,7 +27,7 @@ class T5Dataset(Dataset):
         Skeleton for the class for performing data processing for the T5 model.
         '''
         self.split = split
-        self.tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-small')
+        self.tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-base')
         # T5 uses pad_token_id (0) as the start token for decoding
         self.decoder_start_token_id = self.tokenizer.pad_token_id 
         
