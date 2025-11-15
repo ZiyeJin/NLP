@@ -3,21 +3,21 @@ import os
 import torch
 
 import transformers
-from transformers import T5ForConditionalGeneration, T5Config, T5Tokenizer
+from transformers import T5ForConditionalGeneration, T5Config
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 import wandb
 
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 def setup_wandb(args):
-    # Implement this if you wish to use wandb in your experiments
-    # pass
-    if args.use_wandb:
-        wandb.init(
-            project="t5-text-to-sql", # Change this to your project name
-            name=args.experiment_name,
-            config=args
-        )
+    '''
+    Initializes a wandb run.
+    '''
+    wandb.init(
+        project="hw4-part2-t5",
+        name=args.experiment_name,
+        config=vars(args)
+    )
 
 def initialize_model(args):
     '''
@@ -26,22 +26,19 @@ def initialize_model(args):
     or training a T5 model initialized with the 'google-t5/t5-small' config
     from scratch.
     '''
-    # pass
-    tokenizer = T5Tokenizer.from_pretrained('google-t5/t5-small')
+    model_name = 'google-t5/t5-small'
     
     if args.finetune:
-        # Finetuning: Load the pre-trained weights
-        print("Initializing model from pre-trained 't5-small'...")
-        model = T5ForConditionalGeneration.from_pretrained('google-t5/t5-small')
+        print(f"Initializing model from pretrained checkpoint: {model_name}")
+        model = T5ForConditionalGeneration.from_pretrained(model_name)
     else:
-        # From scratch: Load the config, but not the weights
-        print("Initializing model from 't5-small' config (training from scratch)...")
-        config = T5Config.from_pretrained('google-t5/t5-small')
+        # For the Extra Credit: training from scratch
+        print(f"Initializing model from scratch with config: {model_name}")
+        config = T5Config.from_pretrained(model_name)
         model = T5ForConditionalGeneration(config)
-
-    model = model.to(DEVICE)
-    return model, tokenizer 
-
+        
+    model.to(DEVICE)
+    return model
 
 def mkdir(dirpath):
     if not os.path.exists(dirpath):
@@ -51,32 +48,24 @@ def mkdir(dirpath):
             pass
 
 def save_model(checkpoint_dir, model, best):
-    # Save model checkpoint to be able to load the model later
-    # pass
-    print(f"Saving model to {checkpoint_dir}")
-    mkdir(checkpoint_dir)
-    
-    if best:
-        save_path = os.path.join(checkpoint_dir, 'best_model')
-    else:
-        save_path = os.path.join(checkpoint_dir, 'latest_model')
-        
-    model.save_pretrained(save_path)
+    '''
+    Saves the model checkpoint.
+    '''
+    save_dir = os.path.join(checkpoint_dir, 'best' if best else 'latest')
+    mkdir(save_dir)
+    print(f"Saving model checkpoint to {save_dir}")
+    model.save_pretrained(save_dir)
+    # You might also want to save the tokenizer, though it's standard
+    # tokenizer.save_pretrained(save_dir)
 
 def load_model_from_checkpoint(args, best):
-    # Load model from a checkpoint
-    # pass
-    model_type = 'ft' if args.finetune else 'scr'
-    checkpoint_dir = os.path.join('checkpoints', f'{model_type}_experiments', args.experiment_name)
-    
-    if best:
-        load_path = os.path.join(checkpoint_dir, 'best_model')
-    else:
-        load_path = os.path.join(checkpoint_dir, 'latest_model')
-        
-    print(f"Loading model from {load_path}...")
-    model = T5ForConditionalGeneration.from_pretrained(load_path)
-    model = model.to(DEVICE)
+    '''
+    Loads model from a checkpoint.
+    '''
+    load_dir = os.path.join(args.checkpoint_dir, 'best' if best else 'latest')
+    print(f"Loading model checkpoint from {load_dir}")
+    model = T5ForConditionalGeneration.from_pretrained(load_dir)
+    model.to(DEVICE)
     return model
 
 def initialize_optimizer_and_scheduler(args, model, epoch_length):
@@ -107,7 +96,8 @@ def initialize_optimizer(args, model):
             optimizer_grouped_parameters, lr=args.learning_rate, eps=1e-8, betas=(0.9, 0.999)
         )
     else:
-        pass
+        # You could add other optimizers here if you want
+        raise NotImplementedError(f"Optimizer {args.optimizer_type} not implemented.")
 
     return optimizer
         
@@ -122,7 +112,7 @@ def initialize_scheduler(args, optimizer, epoch_length):
     elif args.scheduler_type == "linear":
         return transformers.get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps)
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Scheduler {args.scheduler_type} not implemented.")
 
 def get_parameter_names(model, forbidden_layer_types):
     result = []
@@ -135,4 +125,3 @@ def get_parameter_names(model, forbidden_layer_types):
     # Add model specific parameters (defined with nn.Parameter) since they are not in any child.
     result += list(model._parameters.keys())
     return result
-
