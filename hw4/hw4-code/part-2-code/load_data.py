@@ -7,166 +7,139 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
 import nltk
-# This line is commented out as it might cause issues in some environments
-# nltk.download('punkt') 
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    # This handles the download to the correct path
+    nltk.download('punkt', quiet=True)
+    
 from transformers import T5TokenizerFast
 import torch
 
-PAD_IDX = 0
+# Import the schema helper from utils
+from utils import get_schema_string
 
-def load_lines(path):
-    with open(path, 'r') as f:
-        lines = f.readlines()
-        lines = [line.strip() for line in lines]
-    return lines
+PAD_IDX = 0
+# Using t5-small as per assignment (change to base only if needed and supported by compute)
+T5_TOKENIZER = T5TokenizerFast.from_pretrained('google-t5/t5-small')
 
 class T5Dataset(Dataset):
 
     def __init__(self, data_folder, split):
         '''
-        Skeleton for the class for performing data processing for the T5 model.
+        Implementation of the T5 Dataset class.
         '''
         self.split = split
-        self.tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-base')
-        # T5 uses pad_token_id (0) as the start token for decoding
-        self.decoder_start_token_id = self.tokenizer.pad_token_id 
+        self.tokenizer = T5_TOKENIZER
         
-        self.data = self.process_data(data_folder, split)
-
-    def process_data(self, data_folder, split):
-        '''
-        Loads and tokenizes the data.
-        '''
-        nl_path = os.path.join(data_folder, f"{split}.nl")
-        sql_path = os.path.join(data_folder, f"{split}.sql")
-
-        nl_lines = load_lines(nl_path)
-
-        # For train and dev, we load both NL and SQL queries
-        if split in ["train", "dev"]:
-            sql_lines = load_lines(sql_path)
-            assert len(nl_lines) == len(sql_lines), "Mismatch in number of examples"
-            
-            processed_data = []
-            for nl, sql in tqdm(zip(nl_lines, sql_lines), desc=f"Tokenizing {split} set"):
-                # We add a prefix for T5, which is a common practice for seq2seq tasks
-                # This helps the model differentiate between tasks if it were multi-task trained
-                input_text = f"translate Natural Language to SQL: {nl}"
-                target_text = sql
-
-                # Tokenize encoder input
-                encoder_inputs = self.tokenizer(input_text, truncation=True, padding=False, return_tensors="pt")
-                
-                # Tokenize decoder input
-                decoder_targets = self.tokenizer(target_text, truncation=True, padding=False, return_tensors="pt")
-
-                processed_data.append({
-                    "encoder_input_ids": encoder_inputs.input_ids.squeeze(0),
-                    "encoder_attention_mask": encoder_inputs.attention_mask.squeeze(0),
-                    "decoder_target_ids": decoder_targets.input_ids.squeeze(0),
-                })
-            return processed_data
-
-        # For test set, we only have NL queries
-        elif split == "test":
-            processed_data = []
-            for nl in tqdm(nl_lines, desc="Tokenizing test set"):
-                input_text = f"translate Natural Language to SQL: {nl}"
-                
-                # Tokenize encoder input
-                encoder_inputs = self.tokenizer(input_text, truncation=True, padding=False, return_tensors="pt")
-                
-                processed_data.append({
-                    "encoder_input_ids": encoder_inputs.input_ids.squeeze(0),
-                    "encoder_attention_mask": encoder_inputs.attention_mask.squeeze(0),
-                })
-            return processed_data
+        # Load and flatten the schema
+        # This assumes utils.py has the get_schema_string function
+        self.schema_string = get_schema_string(os.path.join(data_folder, 'flight_database.schema'))
         
+        # Paths to data files
+        nl_path = os.path.join(data_folder, f'{split}.nl')
+        sql_path = os.path.join(data_folder, f'{split}.sql')
+        
+        # Load raw text
+        self.raw_nl = load_lines(nl_path)
+        if os.path.exists(sql_path):
+            self.raw_sql = load_lines(sql_path)
+            assert len(self.raw_nl) == len(self.raw_sql)
         else:
-            raise ValueError(f"Unknown split: {split}")
+            self.raw_sql = [""] * len(self.raw_nl) # For test set
+            
+        # Process and tokenize data
+        self.inputs, self.outputs = self.process_data()
 
-    
+    def process_data(self):
+        '''
+        Tokenizes the data, adding the schema to the input.
+        '''
+        processed_inputs = []
+        for nl in self.raw_nl:
+            # CRITICAL FIX: Put Schema FIRST, Query LAST.
+            # This ensures the query is never truncated if the schema is too long.
+            input_text = f"translate English to SQL: schema: {self.schema_string} query: {nl}"
+            processed_inputs.append(input_text)
+            
+        # Tokenize inputs
+        # max_length=512 covers most schema+query combos
+        tokenized_inputs = self.tokenizer(processed_inputs, padding=False, truncation=True, max_length=512)
+        
+        # Tokenize outputs (SQL)
+        # max_length=256 gives plenty of room for complex queries
+        tokenized_outputs = self.tokenizer(self.raw_sql, padding=False, truncation=True, max_length=256)
+        
+        return tokenized_inputs, tokenized_outputs
+
     def __len__(self):
-        return len(self.data)
+        return len(self.raw_nl)
 
     def __getitem__(self, idx):
-        item = self.data[idx]
+        input_ids = self.inputs['input_ids'][idx]
+        attention_mask = self.inputs['attention_mask'][idx]
         
-        # For train/dev, return encoder and decoder inputs/targets
-        if self.split in ["train", "dev"]:
-            return (
-                item["encoder_input_ids"],
-                item["encoder_attention_mask"],
-                item["decoder_target_ids"]
-            )
-        # For test, just return encoder inputs
-        else:
-            return (
-                item["encoder_input_ids"],
-                item["encoder_attention_mask"]
-            )
+        output_ids = self.outputs['input_ids'][idx]
+        
+        # Create decoder_input_ids (starts with <pad>)
+        decoder_input_ids = [PAD_IDX] + output_ids
+        
+        # Create decoder_target_ids (ends with <eos>)
+        decoder_target_ids = output_ids + [self.tokenizer.eos_token_id]
+        
+        # For evaluation, we MUST return the raw SQL string
+        raw_sql = self.raw_sql[idx]
+
+        return {
+            "encoder_input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "encoder_attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+            "decoder_input_ids": torch.tensor(decoder_input_ids, dtype=torch.long),
+            "decoder_target_ids": torch.tensor(decoder_target_ids, dtype=torch.long),
+            "raw_sql": raw_sql
+        }
 
 def normal_collate_fn(batch):
     '''
-    Collation function to perform dynamic padding for training and evaluation.
+    Collation function for train and dev.
     '''
-    encoder_ids, encoder_masks, decoder_targets_list = zip(*batch)
-
-    # Pad encoder inputs
-    encoder_ids_padded = pad_sequence(encoder_ids, batch_first=True, padding_value=PAD_IDX)
-    encoder_mask_padded = pad_sequence(encoder_masks, batch_first=True, padding_value=0) # Mask is 0 for padding
-
-    # Pad decoder targets
-    decoder_targets_padded = pad_sequence(decoder_targets_list, batch_first=True, padding_value=PAD_IDX)
-
-    # Create decoder inputs by shifting targets to the right and adding start token
-    # T5 uses the PAD token as the decoder start token.
-    batch_size = encoder_ids_padded.shape[0]
-    decoder_start_tokens = torch.full((batch_size, 1), PAD_IDX, dtype=torch.long)
+    encoder_ids = [item['encoder_input_ids'] for item in batch]
+    encoder_mask = [item['encoder_attention_mask'] for item in batch]
+    decoder_inputs = [item['decoder_input_ids'] for item in batch]
+    decoder_targets = [item['decoder_target_ids'] for item in batch]
     
-    # Shift targets to the right: [START, t1, t2, ...]
-    # We remove the last token from the padded targets to match lengths
-    decoder_inputs_padded = torch.cat([decoder_start_tokens, decoder_targets_padded[:, :-1]], dim=-1)
-
-    # The "initial_decoder_inputs" is just the start token for generation during eval
-    # This matches the shape (batch_size, 1)
-    initial_decoder_inputs = decoder_start_tokens
-
-    return (
-        encoder_ids_padded, 
-        encoder_mask_padded, 
-        decoder_inputs_padded, 
-        decoder_targets_padded, 
-        initial_decoder_inputs
-    )
-
+    # We need this for the eval loop to compare against ground truth
+    raw_sql_batch = [item['raw_sql'] for item in batch]
+    
+    # Pad sequences
+    encoder_ids = pad_sequence(encoder_ids, batch_first=True, padding_value=PAD_IDX)
+    encoder_mask = pad_sequence(encoder_mask, batch_first=True, padding_value=0)
+    decoder_inputs = pad_sequence(decoder_inputs, batch_first=True, padding_value=PAD_IDX)
+    decoder_targets = pad_sequence(decoder_targets, batch_first=True, padding_value=PAD_IDX)
+    
+    return encoder_ids, encoder_mask, decoder_inputs, decoder_targets, raw_sql_batch
 
 def test_collate_fn(batch):
     '''
-    Collation function to perform dynamic padding for inference on the test set.
+    Collation function for the test set.
     '''
-    encoder_ids, encoder_masks = zip(*batch)
-
-    # Pad encoder inputs
-    encoder_ids_padded = pad_sequence(encoder_ids, batch_first=True, padding_value=PAD_IDX)
-    encoder_mask_padded = pad_sequence(encoder_masks, batch_first=True, padding_value=0)
-
-    # Create the initial decoder input (just the start token)
-    batch_size = encoder_ids_padded.shape[0]
-    initial_decoder_inputs = torch.full((batch_size, 1), PAD_IDX, dtype=torch.long)
-
-    return (
-        encoder_ids_padded, 
-        encoder_mask_padded, 
-        initial_decoder_inputs
-    )
-
+    encoder_ids = [item['encoder_input_ids'] for item in batch]
+    encoder_mask = [item['encoder_attention_mask'] for item in batch]
+    
+    # Pad sequences
+    encoder_ids = pad_sequence(encoder_ids, batch_first=True, padding_value=PAD_IDX)
+    encoder_mask = pad_sequence(encoder_mask, batch_first=True, padding_value=0)
+    
+    # Return empty lists for other items to match the train loop structure
+    # The test loop expects 5 return values
+    return encoder_ids, encoder_mask, [], [], []
 
 def get_dataloader(batch_size, split):
     data_folder = 'data'
     dset = T5Dataset(data_folder, split)
     shuffle = split == "train"
-    collate_fn = normal_collate_fn if split != "test" else test_collate_fn
+    
+    # Use normal_collate_fn for train/dev, test_collate_fn for test
+    collate_fn = test_collate_fn if split == "test" else normal_collate_fn 
 
     dataloader = DataLoader(dset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn)
     return dataloader
@@ -178,12 +151,12 @@ def load_t5_data(batch_size, test_batch_size):
     
     return train_loader, dev_loader, test_loader
 
+def load_lines(path):
+    with open(path, 'r') as f:
+        lines = f.readlines()
+        lines = [line.strip() for line in lines]
+    return lines
 
 def load_prompting_data(data_folder):
-    # This is for Part 3, but we fill it in to make the file complete
-    train_x = load_lines(os.path.join(data_folder, "train.nl"))
-    train_y = load_lines(os.path.join(data_folder, "train.sql"))
-    dev_x = load_lines(os.path.join(data_folder, "dev.nl"))
-    dev_y = load_lines(os.path.join(data_folder, "dev.sql"))
-    test_x = load_lines(os.path.join(data_folder, "test.nl"))
-    return train_x, train_y, dev_x, dev_y, test_x
+    # This is for Part 3, leaving empty for now
+    return [], [], [], [], []
