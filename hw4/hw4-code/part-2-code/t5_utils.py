@@ -1,190 +1,108 @@
-import sqlite3
-import numpy as np
 import os
-import re
-import pickle
-import random
-from tqdm import tqdm
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Any
-
 import torch
+import transformers
+from transformers import T5ForConditionalGeneration, T5Config, T5TokenizerFast
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+import wandb
 
-DB_PATH = 'data/flight_database.db'
+DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-def compute_metrics(gt_path: str, model_path: str, gt_query_records: str = None, model_query_records: str = None):
+def setup_wandb(args):
+    pass
+
+def initialize_model(args):
     '''
-    Main function to compute the three metrics used for evaluation.
+    Helper function to initialize the model and tokenizer.
+    Now uses args.model_name instead of hardcoding.
     '''
-    gt_qs, gt_records, _ = load_queries_and_records(gt_path, gt_query_records)
-    model_qs, model_records, model_error_msgs = load_queries_and_records(model_path, model_query_records)
-
-    sql_em = compute_sql_exact_match(gt_qs, model_qs)
-    record_em = compute_record_exact_match(gt_records, model_records)
-    record_f1 = compute_record_F1(gt_records, model_records)
-
-    return sql_em, record_em, record_f1, model_error_msgs
-
-def load_queries_and_records(sql_path: str, record_path: str):
-    '''
-    Helper function for loading saved SQL queries and for computing the
-    dataset records associated with said queries.
-    '''
-    read_qs = read_queries(sql_path)
-
-    if record_path is not None and os.path.exists(record_path):
-        with open(record_path, 'rb') as f:
-            records, error_msgs = pickle.load(f)
+    print(f"Initializing model: {args.model_name}")
+    
+    # Load tokenizer based on the argument
+    tokenizer = T5TokenizerFast.from_pretrained(args.model_name)
+    
+    if args.finetune:
+        print(f"Loading pretrained weights for {args.model_name}...")
+        model = T5ForConditionalGeneration.from_pretrained(args.model_name)
     else:
-        # If path is None or file doesn't exist, compute from scratch
-        records, error_msgs = compute_records(read_qs)
+        print(f"Initializing {args.model_name} from scratch (random weights)...")
+        config = T5Config.from_pretrained(args.model_name)
+        model = T5ForConditionalGeneration(config)
 
-    return read_qs, records, error_msgs
+    model = model.to(DEVICE)
+    return model, tokenizer
 
-def save_queries_and_records(sql_queries: List[str], sql_path: str, record_path: str):
-    '''
-    Helper function to save model generated SQL queries and their associated records.
-    '''
-    # First save the queries
-    with open(sql_path, 'w') as f:
-        for query in sql_queries:
-            f.write(f'{query}\n')
+def mkdir(dirpath):
+    if not os.path.exists(dirpath):
+        try:
+            os.makedirs(dirpath)
+        except FileExistsError:
+            pass
 
-    # Next compute and save records
-    records, error_msgs = compute_records(sql_queries)    
-    with open(record_path, 'wb') as f:
-        pickle.dump((records, error_msgs), f)
+def save_model(checkpoint_dir, model, best):
+    print(f"Saving model to {checkpoint_dir}")
+    mkdir(checkpoint_dir)
+    save_path = os.path.join(checkpoint_dir, 'best_model' if best else 'latest_model')
+    model.save_pretrained(save_path)
 
-def read_queries(sql_path: str):
-    with open(sql_path, 'r') as f:
-        qs = [q.strip() for q in f.readlines()]
-    return qs
-
-def compute_records(processed_qs: List[str]):
-    '''
-    Helper function for computing the records associated with each SQL query.
-    '''
-    num_threads = 10
-    timeout_secs = 120
-
-    pool = ThreadPoolExecutor(num_threads)
-    futures = []
-    for i, query in enumerate(processed_qs):
-        futures.append(pool.submit(compute_record, i, query))
+def load_model_from_checkpoint(args, best):
+    model_type = 'ft' if args.finetune else 'scr'
+    checkpoint_dir = os.path.join('checkpoints', f'{model_type}_experiments', args.experiment_name)
+    load_path = os.path.join(checkpoint_dir, 'best_model' if best else 'latest_model')
         
-    rec_dict = {}
-    try:
-        for x in tqdm(as_completed(futures, timeout=timeout_secs), total=len(futures), desc="Executing Queries"):
-            query_id, rec, error_msg = x.result()
-            rec_dict[query_id] = (rec, error_msg)
-    except:
-        for future in futures:
-            if not future.done():
-                future.cancel()
-            
-    recs = []
-    error_msgs = []
-    for i in range(len(processed_qs)):
-        if i in rec_dict:
-            rec, error_msg = rec_dict[i]
-            recs.append(rec)
-            error_msgs.append(error_msg)
-        else:
-            recs.append([])
-            error_msgs.append("Query timed out")
-            
-    return recs, error_msgs
+    print(f"Loading model from {load_path}...")
+    model = T5ForConditionalGeneration.from_pretrained(load_path)
+    model = model.to(DEVICE)
+    return model
 
-def compute_record(query_id, query):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+def initialize_optimizer_and_scheduler(args, model, epoch_length):
+    optimizer = initialize_optimizer(args, model)
+    scheduler = initialize_scheduler(args, optimizer, epoch_length)
+    return optimizer, scheduler
 
-    try:
-        cursor.execute(query)
-        rec = cursor.fetchall()
-        error_msg = ""
-    except Exception as e:
-        rec = []
-        error_msg = f"{type(e).__name__}: {e}"
+def initialize_optimizer(args, model):
+    decay_parameters = get_parameter_names(model, transformers.pytorch_utils.ALL_LAYERNORM_LAYERS)
+    decay_parameters = [name for name in decay_parameters if "bias" not in name]
+    optimizer_grouped_parameters = [
+        {
+            "params": [
+                p for n, p in model.named_parameters() if (n in decay_parameters and p.requires_grad)
+            ],
+            "weight_decay": args.weight_decay,
+        },
+        {
+            "params": [
+                p for n, p in model.named_parameters() if (n not in decay_parameters and p.requires_grad)
+            ],
+            "weight_decay": 0.0,
+        },
+    ]
 
-    conn.close()
-    return query_id, rec, error_msg
+    if args.optimizer_type == "AdamW":
+        optimizer = torch.optim.AdamW(
+            optimizer_grouped_parameters, lr=args.learning_rate, eps=1e-8, betas=(0.9, 0.999)
+        )
+    return optimizer
+        
+def initialize_scheduler(args, optimizer, epoch_length):
+    num_training_steps = epoch_length * args.max_n_epochs
+    num_warmup_steps = epoch_length * args.num_warmup_epochs
 
-def compute_sql_exact_match(gt_qs: List[str], model_qs: List[str]):
-    total = 0
-    ems = 0
-    for gt_q, model_q in zip(gt_qs, model_qs):
-        total += 1
-        ems += 1 if gt_q == model_q else 0
-    return ems / total
+    if args.scheduler_type == "none":
+        return None
+    elif args.scheduler_type == "cosine":
+        return transformers.get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps)
+    elif args.scheduler_type == "linear":
+        return transformers.get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps)
+    else:
+        raise NotImplementedError
 
-def compute_record_exact_match(gt_records: List[Any], model_records: List[Any]):
-    total = 0
-    ems = 0
-    for gt_rec, model_rec in zip(gt_records, model_records):
-        total += 1
-        ems += 1 if set(gt_rec) == set(model_rec) else 0
-    return ems / total
-
-def compute_record_F1(gt_records: List[Any], model_records: List[Any]):
-    F1s = []
-    for gt_rec, model_rec in zip(gt_records, model_records):
-        gt_set = set(gt_rec)
-        model_set = set(model_rec)        
-
-        precision_total = len(model_set)
-        if precision_total == 0:
-            precision = 1
-        else:
-            precision = len([rec for rec in model_set if rec in gt_set]) / precision_total
-    
-        recall_total = len(gt_set)    
-        if recall_total == 0:
-            recall = 1
-        else:
-            recall = len([rec for rec in gt_set if rec in model_set]) / recall_total
-
-        F1 = 2 * precision * recall / (precision + recall + 1e-8)
-        F1s.append(F1)
-
-    return np.mean(F1s)
-
-def set_random_seeds(seed_value=42):
-    random.seed(seed_value)
-    np.random.seed(seed_value)
-    
-    torch.manual_seed(seed_value)
-    torch.cuda.manual_seed(seed_value)
-    torch.cuda.manual_seed_all(seed_value)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-# --- NEW HELPER FUNCTION ---
-def get_schema_string(schema_file):
-    """
-    Reads the schema file and converts it into a single,
-    simplified string representation.
-    """
-    with open(schema_file, 'r') as f:
-        schema_raw = f.read()
-    
-    tables = {}
-    current_table = None
-    
-    for line in schema_raw.splitlines():
-        if line.strip() == "":
-            continue
-        if not line.startswith("\t"):
-            current_table = line.strip()
-            tables[current_table] = []
-        else:
-            col_name = line.strip().split(" ")[0]
-            if current_table:
-                tables[current_table].append(col_name)
-    
-    schema_parts = []
-    for table, cols in tables.items():
-        schema_parts.append(f"{table} ( {', '.join(cols)} )")
-    
-    return " , ".join(schema_parts)
+def get_parameter_names(model, forbidden_layer_types):
+    result = []
+    for name, child in model.named_children():
+        result += [
+            f"{name}.{n}"
+            for n in get_parameter_names(child, forbidden_layer_types)
+            if not isinstance(child, tuple(forbidden_layer_types))
+        ]
+    result += list(model._parameters.keys())
+    return result
